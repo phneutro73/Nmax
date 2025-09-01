@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ===================== Opciones =====================
+usage() {
+  cat <<EOF
+Uso:
+  $0 -t <objetivo|lista.txt> [--tcp {top1000|full}] [-U {N|full|0}] [--aggr|--slow] [--no-color]
+
+Opciones:
+  -t TARGET        IP/host o fichero con una IP por línea
+  --tcp MODE       'top1000' (defecto) o 'full' (-p-)
+  -U VAL           UDP: número top-ports (p.ej. 200, 1000), 'full' (-p-), o '0' para desactivar (defecto 200)
+  --aggr           T5 + --min-rate 4000
+  --slow           T3 + --min-rate 300
+  --no-color       Desactiva salida en color ANSI
+EOF
+}
+
+# ===================== Argumentos =====================
+TARGET=""; TCP_MODE="top1000"; UDP_ARG="200"
+TEMPL="T4"; MIN_RATE=1500
+USE_COLOR=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -t) TARGET="${2:-}"; shift 2;;
+    --tcp) TCP_MODE="${2:-top1000}"; shift 2;;
+    -U) UDP_ARG="${2:-200}"; shift 2;;
+    --aggr) TEMPL="T5"; MIN_RATE=4000; shift;;
+    --slow) TEMPL="T3"; MIN_RATE=300; shift;;
+    --no-color) USE_COLOR=0; shift;;
+    -h|--help) usage; exit 0;;
+    *) echo "[!] Opción desconocida: $1"; usage; exit 1;;
+  esac
+done
+[[ -z "$TARGET" ]] && { echo "[!] Debes indicar -t"; usage; exit 1; }
+
+# ===================== Colores (por defecto activados) =====================
+if [[ $USE_COLOR -eq 1 && -t 1 ]] && command -v tput >/dev/null 2>&1; then
+  if [[ $(tput colors 2>/dev/null || echo 0) -ge 8 ]]; then
+    R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; B=$'\e[34m'; C=$'\e[36m'; W=$'\e[97m'; D=$'\e[90m'; Z=$'\e[0m'
+  else
+    USE_COLOR=0
+  fi
+fi
+if [[ $USE_COLOR -eq 0 ]]; then R=""; G=""; Y=""; B=""; C=""; W=""; D=""; Z=""; fi
+
+# ===================== Comprobaciones =====================
+if ! command -v nmap >/dev/null 2>&1; then
+  echo "[!] nmap no está instalado. Instálalo (p.ej. sudo apt install nmap) y reintenta."
+  exit 1
+fi
+
+SUDO=""
+if [[ $EUID -eq 0 ]]; then
+  SCAN_TCP="-sS"
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  SUDO="sudo"; SCAN_TCP="-sS"
+else
+  SCAN_TCP="-sT"
+fi
+
+# ===================== Utilidades =====================
+spinner() { # spinner "mensaje" cmd...
+  local msg="$1"; shift
+  if [[ -t 1 ]]; then
+    ("$@" >/dev/null 2>&1) & local pid=$!
+    local i=0; local frames='|/-\'; local start=$(date +%s)
+    while kill -0 "$pid" 2>/dev/null; do
+      i=$(( (i+1) % 4 )); local elapsed=$(( $(date +%s) - start ))
+      printf "\r%s[%s]%s %s %ss" "$D" "${frames:$i:1}" "$Z" "$msg" "$elapsed"
+      sleep 0.1
+    done
+    wait $pid || true
+    printf "\r%*s\r" 100 ""
+  else
+    "$@" >/dev/null 2>&1 || true
+  fi
+}
+
+extract_ports_from_gnmap() { # file host proto -> csv
+  local file="$1" host="$2" proto="$3"
+  awk -v H="$host" -v P="$proto" '
+    $1=="Host:" && $2==H {
+      p = index($0, "Ports: ")
+      if (p > 0) {
+        s = substr($0, p + 7)
+        n = split(s, a, ",")
+        for (i=1; i<=n; i++) {
+          g = a[i]
+          sub(/^[ \t]+/, "", g)
+          split(g, f, "/")
+          if (f[3]==P && (f[2]=="open" || (P=="udp" && f[2]=="open|filtered"))) {
+            print f[1]
+          }
+        }
+      }
+    }
+  ' "$file" | sort -n | uniq | paste -sd, - 2>/dev/null || true
+}
+
+# ===================== Preparación =====================
+TS=$(date +"%Y%m%d-%H%M%S")
+OUTDIR="scans/$TS"; mkdir -p "$OUTDIR"
+echo "${B}NMAP MAX – Roberto Peralta – $TS${Z}"
+echo "Salida: $OUTDIR"
+echo "TCP: $TCP_MODE  UDP: $UDP_ARG  Plantilla: $TEMPL  min-rate: $MIN_RATE"
+echo
+
+# Cargar objetivos
+TARGETS=()
+if [[ -f "$TARGET" ]]; then
+  mapfile -t TARGETS < <(grep -vE '^\s*#' "$TARGET" | sed '/^\s*$/d')
+else
+  TARGETS+=("$TARGET")
+fi
+
+# ===================== Escaneo =====================
+for host in "${TARGETS[@]}"; do
+  [[ -z "$host" ]] && continue
+  base="$OUTDIR/$(echo "$host" | tr '/:' '_')"
+  echo -e "${W}==> Objetivo: $host${Z}"
+
+  # ----- TCP -----
+  if [[ "$TCP_MODE" == "full" ]]; then TCP_SCOPE="-p-"; TCP_TAG="full"; else TCP_SCOPE=""; TCP_TAG="top1000"; fi
+  spinner "Escaneando TCP $TCP_TAG..." ${SUDO:+sudo} nmap $SCAN_TCP -Pn -$TEMPL --min-rate $MIN_RATE $TCP_SCOPE -oA "${base}_tcp_${TCP_TAG}" "$host"
+  TCP_PORTS="$(extract_ports_from_gnmap "${base}_tcp_${TCP_TAG}.gnmap" "$host" "tcp" || true)"
+  if [[ -n "${TCP_PORTS:-}" ]]; then
+    echo "${G}TCP abiertos:${Z} $TCP_PORTS"
+    echo "  ${C}nmap -sC -sV -p$TCP_PORTS $host${Z}"
+  else
+    echo "${Y}Sin puertos TCP abiertos.${Z}"
+  fi
+
+  # ----- UDP -----
+  UDP_PORTS=""
+  if [[ "$UDP_ARG" == "0" || "$UDP_ARG" == "off" ]]; then
+    echo "${D}UDP desactivado (-U 0)${Z}"
+  else
+    if [[ "$UDP_ARG" == "full" ]]; then UDP_SCOPE="-p-"; UDP_TAG="full"; else UDP_SCOPE="--top-ports $UDP_ARG"; UDP_TAG="top${UDP_ARG}"; fi
+    spinner "Escaneando UDP $UDP_TAG..." ${SUDO:+sudo} nmap -sU -Pn -$TEMPL --min-rate $MIN_RATE $UDP_SCOPE -oA "${base}_udp_${UDP_TAG}" "$host"
+    UDP_PORTS="$(extract_ports_from_gnmap "${base}_udp_${UDP_TAG}.gnmap" "$host" "udp" || true)"
+    if [[ -n "${UDP_PORTS:-}" ]]; then
+      echo "${G}UDP abiertos:${Z} $UDP_PORTS"
+      echo "  ${C}nmap -sU -sC -sV -p$UDP_PORTS $host${Z}"
+    else
+      echo "${Y}Sin puertos UDP abiertos.${Z}"
+    fi
+  fi
+
+  echo -e "${B}Resumen $host:${Z}"
+  echo "  TCP: ${TCP_PORTS:-ninguno}"
+  echo "  UDP: ${UDP_PORTS:-ninguno}"
+  echo
+done
+
+echo -e "${G}[✓] Escaneo finalizado.${Z} Revisa: ${W}$OUTDIR${Z}"
+
