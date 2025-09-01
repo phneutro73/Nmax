@@ -103,7 +103,7 @@ extract_ports_from_gnmap() { # file host proto -> csv
 # ===================== Preparación =====================
 TS=$(date +"%Y%m%d-%H%M%S")
 OUTDIR="scans/$TS"; mkdir -p "$OUTDIR"
-echo "${B}NMAP MAX – Roberto Peralta – $TS${Z}"
+echo "${B}NMAX – Roberto Peralta – $TS${Z}"
 echo "Salida: $OUTDIR"
 echo "TCP: $TCP_MODE  UDP: $UDP_ARG  Plantilla: $TEMPL  min-rate: $MIN_RATE"
 echo
