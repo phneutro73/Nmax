@@ -25,7 +25,7 @@ El script **no utiliza descubrimiento dinámico de puertos**, es **compatible co
 
 Por cada objetivo se genera una carpeta de salida como:
 
-scans/20250901-181958/
+``` scans/20250901-181958/ ```
 
 Dentro de ella tendrás archivos como:
 
@@ -47,10 +47,10 @@ No necesitas color en el terminal, pero si lo tienes, el script se verá mejor.
 ---
 
 ## 🛠️ Uso básico
-
+```
 chmod +x nmax 
-
 ./nmax -t 10.10.10.203
+```
 
 Esto realizará:
 
@@ -89,37 +89,41 @@ Desactiva todos los colores ANSI (útil para scripts y logs)
 ## 🧪 Ejemplos de uso
 
 Escaneo rápido con colores:
-
+```
 ./nmax -t 10.10.10.203
+```
 
 Escaneo TCP completo + UDP top-1000:
-
+```
 ./nmax -t 10.10.10.203 --tcp full -U 1000
+```
 
 Solo escaneo TCP, sin UDP:
-
+```
 ./nmax -t 10.10.10.203 -U 0
+```
 
 Escaneo sin colores (ideal para logs):
-
+```
 ./nmax -t 10.10.10.203 --no-color
+```
 
 Escaneo de varios objetivos desde archivo:
-
+```
 ./nmax -t objetivos.txt
-
+```
 ---
 
 ## 🗂️ Resultado típico
 
 Ejemplo de salida:
-
+```
 ==> Objetivo: 10.10.10.203  
 TCP abiertos: 22,80  
   Comando -sC -sV: nmap -sC -sV -p22,80 10.10.10.203  
 UDP abiertos: 53,161  
   Comando -sC -sV: nmap -sU -sC -sV -p53,161 10.10.10.203
-
+```
 ---
 
 ## 📦 Integración y mejoras
